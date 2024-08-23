@@ -125,10 +125,29 @@ end
 
 module HealthMonitorMethods
   def aggregate_readings(previous_pulse:, reading:, data: {})
+    previous_pulse ||= {}
     {
       reading: reading,
       reading_rpt: (previous_pulse[:reading] == reading) ? previous_pulse[:reading_rpt] + 1 : 1,
       reading_chg: (previous_pulse[:reading] == reading) ? previous_pulse[:reading_chg] : Time.now
+    }.merge(data)
+  end
+
+  def aggregate_disk_readings(previous_disk_health:, reading:, data: {})
+  previous_disk_health ||= {}
+    {
+      reading: reading,
+      reading_rpt: (previous_disk_health[:reading] == reading) ? previous_disk_health[:reading_rpt] + 1 : 1,
+      reading_chg: (previous_disk_health[:reading] == reading) ? previous_disk_health[:reading_chg] : Time.now
+    }.merge(data)
+  end
+
+  def aggregate_health(previous_health:, reading:, data: {})
+    previous_health ||= {}
+    {
+      reading: reading,
+      reading_rpt: (previous_health[:reading] == reading) ? previous_health[:reading_rpt] + 1 : 1,
+      reading_chg: (previous_health[:reading] == reading) ? previous_health[:reading_chg] : Time.now
     }.merge(data)
   end
 
@@ -169,3 +188,4 @@ module Sequel
     prepend SequelExtensions
   end
 end
+
