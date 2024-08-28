@@ -10,8 +10,11 @@ class MonitorableResource
     @session = nil
     @mutex = Mutex.new
     @pulse = {}
+    @health = {}
     @pulse_check_started_at = Time.now
+    @health_check_started_at = Time.now
     @pulse_thread = nil
+    @health_thread = nil
     @run_event_loop = false
     @deleted = false
   end
@@ -53,6 +56,26 @@ class MonitorableResource
 
     @run_event_loop = false if @resource.needs_event_loop_for_pulse_check?
     @pulse_thread&.join
+  end
+
+  def check_health
+    @run_event_loop = true if @resource.needs_event_loop_for_pulse_check?
+
+    @health_check_started_at = Time.now
+    begin
+      if @resource.respond_to?(:check_health)
+        @health = @resource.check_health(session: @session, previous_health: @health)
+        # Todo: Implement logic for @health != "up"
+        Clog.emit("Got new health data.") { {got_health: {ubid: @resource.ubid, health: @health}} } if @health[:reading_rpt] % 5 == 1
+      else
+        check_pulse
+      end
+    rescue => ex
+      Clog.emit("health checking has failed.") { {disk_health_check_failure: {ubid: @resource.ubid, exception: Util.exception_to_hash(ex)}} }
+    end
+
+    @run_event_loop = false if @resource.needs_event_loop_for_pulse_check?
+    @health_thread&.join
   end
 
   def close_resource_session

@@ -254,6 +254,48 @@ class VmHost < Sequel::Model
     pulse
   end
 
+  # Eventually, we should define health models for Pulse,
+  # DiskHealth, NetworkHealth.
+
+  # Model should implement below methods.
+  # {
+  #   get_status()
+  #   is_down()
+  # }
+
+  def check_disk_health(session:, previous_disk_health:)
+    reading = begin
+      disks = session[:ssh_session].exec!("nvme list | awk '/dev\/nvme/ {print $1}'").strip
+
+      # Check if any 'nvme' disks are present
+      nvme_disks = disks.lines.any? { |line| line.include?("nvme") }
+
+      if nvme_disks
+        "up"
+      else
+        "down"
+      end
+    rescue
+      "down"
+    end
+
+    disk_health = aggregate_disk_readings(previous_disk_health: previous_disk_health, reading: reading)
+
+    if disk_health[:reading] == "down" && disk_health[:reading_rpt] > 5 && Time.now - disk_health[:reading_chg] > 30 && !reload.checkup_set?
+      incr_checkup
+    end
+
+    disk_health
+  end
+
+  def check_health(session:, previous_health:)
+    health = {
+      pulse: check_pulse(session: session, previous_pulse: previous_health[:pulse]),
+      disk_health: check_disk_health(session: session, previous_disk_health: previous_health[:disk_health])
+    }
+    aggregate_health(previous_health: previous_health, reading: health)
+  end
+
   def available_storage_gib
     storage_devices.sum { _1.available_storage_gib }
   end

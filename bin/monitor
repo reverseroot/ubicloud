@@ -39,7 +39,7 @@ pulse_checker = Thread.new do
           r.lock_no_wait do
             r.open_resource_session
             r.process_event_loop
-            r.check_pulse
+            r.check_health
           end
         end
       end
