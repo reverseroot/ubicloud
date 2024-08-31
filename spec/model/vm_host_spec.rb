@@ -3,6 +3,8 @@
 require_relative "spec_helper"
 require_relative "../../model/address"
 
+VM_HOST_NVME_DISK_COMMAND = "nvme list"
+
 RSpec.describe VmHost do
   subject(:vh) {
     described_class.new(
@@ -336,5 +338,33 @@ RSpec.describe VmHost do
     expect(vh).to receive(:reload).and_return(vh)
     expect(vh).to receive(:incr_checkup)
     expect(vh.check_pulse(session: session, previous_pulse: pulse)[:reading]).to eq("down")
+  end
+
+  it "checks disk health" do
+    session = {
+      ssh_session: instance_double(Net::SSH::Connection::Session)
+    }
+    disk_health = {
+      reading: "down",
+      reading_rpt: 5,
+      reading_chg: Time.now - 30
+    }
+
+    cmd_output = "/dev/nvme0n1\n/dev/nvme1n1"
+    expect(session[:ssh_session]).to receive(:exec!).with(VM_HOST_NVME_DISK_COMMAND).and_return(cmd_output)
+    expect(vh).to receive(:get_disk_status).with(cmd_output: cmd_output).and_return("up")
+    expect(vh.check_disk_health(session: session, previous_disk_health: disk_health)[:reading]).to eq("up")
+
+    cmd_output = ""
+    expect(session[:ssh_session]).to receive(:exec!).with(VM_HOST_NVME_DISK_COMMAND).and_return(cmd_output)
+    expect(vh).to receive(:get_disk_status).with(cmd_output: cmd_output).and_return("no_nvme_disks")
+    expect(vh.check_disk_health(session: session, previous_disk_health: disk_health)[:reading]).to eq("no_nvme_disks")
+
+    cmd_output = "Segmentation fault"
+    expect(session[:ssh_session]).to receive(:exec!).with(VM_HOST_NVME_DISK_COMMAND).and_return(cmd_output)
+    expect(vh).to receive(:get_disk_status).with(cmd_output: cmd_output).and_return("down")
+    expect(vh).to receive(:reload).and_return(vh)
+    expect(vh).to receive(:incr_checkup)
+    expect(vh.check_disk_health(session: session, previous_disk_health: disk_health)[:reading]).to eq("down")
   end
 end

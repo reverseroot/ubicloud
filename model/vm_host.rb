@@ -2,6 +2,7 @@
 
 require_relative "../model"
 require_relative "../lib/hosting/apis"
+require_relative "../lib/monitor_signal"
 
 class VmHost < Sequel::Model
   one_to_one :strand, key: :id
@@ -21,6 +22,8 @@ class VmHost < Sequel::Model
   include SemaphoreMethods
   include HealthMonitorMethods
   semaphore :checkup, :reboot, :destroy
+
+  VM_HOST_NVME_DISK_COMMAND = "nvme list"
 
   def host_prefix
     net6.netmask.prefix_len
@@ -238,6 +241,13 @@ class VmHost < Sequel::Model
     }
   end
 
+  def init_monitor_signals
+    {
+      pulse: Pulse.new(self),
+      disk_health: DiskHealth.new(self)
+    }
+  end
+
   def check_pulse(session:, previous_pulse:)
     reading = begin
       session[:ssh_session].exec!("true")
@@ -252,6 +262,36 @@ class VmHost < Sequel::Model
     end
 
     pulse
+  end
+
+  def check_disk_health(session:, previous_disk_health:)
+    reading = begin
+      cmd_output = session[:ssh_session].exec!(VM_HOST_NVME_DISK_COMMAND).strip
+      get_disk_status(cmd_output: cmd_output)
+    rescue
+      "down"
+    end
+
+    disk_health = aggregate_disk_readings(previous_disk_health: previous_disk_health, reading: reading)
+    if disk_health[:reading] == "down" && disk_health[:reading_rpt] > 5 && Time.now - disk_health[:reading_chg] > 30 && !reload.checkup_set?
+      incr_checkup
+    end
+
+    disk_health
+  end
+
+  def get_disk_status(cmd_output:)
+    case cmd_output
+      when /segmentation fault/i
+        "down"
+      else
+        # Check if any NVMe disks are listed in the response
+        if cmd_output.lines.any? { |line| line.start_with?('/dev/nvme') }
+          "up"
+        else
+          "no_nvme_disks"
+        end
+      end
   end
 
   def available_storage_gib

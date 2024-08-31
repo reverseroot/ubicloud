@@ -245,8 +245,14 @@ class Prog::Vm::HostNexus < Prog::Base
   end
 
   def available?
+    #check ssh connectivity
     sshable.cmd("true")
-    true
+
+    #check disk connectivity
+    cmd_output = sshable.cmd(VM_HOST_NVME_DISK_COMMAND)
+    if vm_host.get_disk_status(cmd_output: cmd_output) == "down"
+      return false
+    end
   rescue
     false
   end
