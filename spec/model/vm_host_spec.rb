@@ -4,6 +4,9 @@ require_relative "spec_helper"
 require_relative "../../model/address"
 
 VM_HOST_NVME_DISK_COMMAND = "nvme list"
+# Google's public DNS
+NSLOOKUP_IPV4_COMMAND = "timeout 1s nslookup 8.8.8.8"
+NSLOOKUP_IPV6_COMMAND = "timeout 1s nslookup -type=AAAA 2001:4860:4860::8888"
 
 RSpec.describe VmHost do
   subject(:vh) {
@@ -37,6 +40,12 @@ RSpec.describe VmHost do
       Hosting::HetznerApis::IpInfo.new(ip_address: _1, source_host_ip: _2, is_failover: _3)
     }
   }
+
+  it "#constants" do
+    expect(VmHost::VM_HOST_NVME_DISK_COMMAND).to eq("nvme list")
+    expect(VmHost::NSLOOKUP_IPV4_COMMAND).to eq("timeout 1s nslookup 8.8.8.8")
+    expect(VmHost::NSLOOKUP_IPV6_COMMAND).to eq("timeout 1s nslookup -type=AAAA 2001:4860:4860::8888")
+  end
 
   it "requires an Sshable too" do
     expect {
@@ -321,6 +330,18 @@ RSpec.describe VmHost do
     vh.init_health_monitor_session
   end
 
+  it "initializes pulse, disk_health, and network_health" do
+    result = vh.init_monitor_signals
+    expect(result).to include(
+      pulse: be_a(Pulse),
+      disk_health: be_a(DiskHealth),
+      network_health: be_a(NetworkHealth)
+    )
+    expect(result[:pulse].instance_variable_get(:@resource)).to eq(vh)
+    expect(result[:disk_health].instance_variable_get(:@resource)).to eq(vh)
+    expect(result[:network_health].instance_variable_get(:@resource)).to eq(vh)
+  end
+
   it "checks pulse" do
     session = {
       ssh_session: instance_double(Net::SSH::Connection::Session)
@@ -358,7 +379,7 @@ RSpec.describe VmHost do
     cmd_output = ""
     expect(session[:ssh_session]).to receive(:exec!).with(VM_HOST_NVME_DISK_COMMAND).and_return(cmd_output)
     expect(vh).to receive(:get_disk_status).with(cmd_output: cmd_output).and_return("no_nvme_disks")
-    expect(vh.check_disk_health(session: session, previous_disk_health: disk_health)[:reading]).to eq("no_nvme_disks")
+    expect(vh.check_disk_health(session: session, previous_disk_health: nil)[:reading]).to eq("no_nvme_disks")
 
     cmd_output = "Segmentation fault"
     expect(session[:ssh_session]).to receive(:exec!).with(VM_HOST_NVME_DISK_COMMAND).and_return(cmd_output)
@@ -366,5 +387,80 @@ RSpec.describe VmHost do
     expect(vh).to receive(:reload).and_return(vh)
     expect(vh).to receive(:incr_checkup)
     expect(vh.check_disk_health(session: session, previous_disk_health: disk_health)[:reading]).to eq("down")
+
+    expect(session[:ssh_session]).to receive(:exec!).with(VM_HOST_NVME_DISK_COMMAND).and_raise Sshable::SshError
+    expect(vh).to receive(:reload).and_return(vh)
+    expect(vh).to receive(:incr_checkup)
+    expect(vh.check_disk_health(session: session, previous_disk_health: disk_health)[:reading]).to eq("down")
+  end
+
+  it "checks network health" do
+    session = {
+      ssh_session: instance_double(Net::SSH::Connection::Session)
+    }
+    network_health = {
+      reading: "down",
+      reading_rpt: 5,
+      reading_chg: Time.now - 30
+    }
+    ipv4_cmd_output = "dns.google"
+    ipv6_cmd_output = "dns.google"
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_cmd_output)
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv4_cmd_output).and_return("up")
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV6_COMMAND).and_return(ipv6_cmd_output)
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv6_cmd_output).and_return("up")
+    expect(vh.check_network_health(session: session, previous_network_health: network_health)[:reading]).to eq("up")
+
+    ipv4_cmd_output = "dns.google"
+    ipv6_cmd_output = "No response"
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_cmd_output)
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv4_cmd_output).and_return("up")
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV6_COMMAND).and_return(ipv6_cmd_output)
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv6_cmd_output).and_return("down")
+    expect(vh.check_network_health(session: session, previous_network_health: nil)[:reading]).to eq("down")
+
+
+    ipv4_cmd_output = "Host not found"
+    ipv6_cmd_output = "No response"
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_cmd_output)
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv4_cmd_output).and_return("down")
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV6_COMMAND).and_return(ipv6_cmd_output)
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv6_cmd_output).and_return("down")
+    expect(vh.check_network_health(session: session, previous_network_health: nil)[:reading]).to eq("down")
+
+    ipv4_cmd_output = "No host"
+    ipv6_cmd_output = "Timeout while lookup"
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_cmd_output)
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV6_COMMAND).and_return(ipv6_cmd_output)
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv4_cmd_output).and_return("down")
+    expect(vh).to receive(:get_network_status).with(cmd_output: ipv6_cmd_output).and_return("down")
+    expect(vh).to receive(:reload).and_return(vh)
+    expect(vh).to receive(:incr_checkup)
+    expect(vh.check_network_health(session: session, previous_network_health: network_health)[:reading]).to eq("down")
+
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV4_COMMAND).and_raise Sshable::SshError
+    expect(session[:ssh_session]).to receive(:exec!).with(NSLOOKUP_IPV6_COMMAND).and_raise Sshable::SshError
+    expect(vh).to receive(:reload).and_return(vh)
+    expect(vh).to receive(:incr_checkup)
+    expect(vh.check_network_health(session: session, previous_network_health: network_health)[:reading]).to eq("down")
+  end
+
+  it "#get_disk_status" do
+    cmd_output = "Segmentation fault"
+    expect(vh.get_disk_status(cmd_output: cmd_output)).to eq("down")
+
+    cmd_output = "/dev/nvme0n1\n/dev/nvme1n1"
+    expect(vh.get_disk_status(cmd_output: cmd_output)).to eq("up")
+
+    cmd_output = "/dev/sda1\n/dev/sdb1"
+    expect(vh.get_disk_status(cmd_output: cmd_output)).to eq("no_nvme_disks")
+  end
+
+  it "#get_network_status" do
+    cmd_output = "...... dns.google\n...."
+    expect(vh.get_network_status(cmd_output: cmd_output)).to eq("up")
+
+    cmd_output = "Not found host"
+    expect(vh.get_network_status(cmd_output: cmd_output)).to eq("down")
   end
 end

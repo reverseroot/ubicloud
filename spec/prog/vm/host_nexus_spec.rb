@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "../../model/spec_helper"
+require_relative "../../model/vm_host_spec"
 
 RSpec.describe Prog::Vm::HostNexus do
   subject(:nx) { described_class.new(st) }
@@ -384,11 +385,77 @@ RSpec.describe Prog::Vm::HostNexus do
   end
 
   describe "#available?" do
-    it "returns the available status" do
-      expect(sshable).to receive(:cmd).and_return("true")
-      expect(nx.available?).to be true
+    it "returns true when all checks pass" do
+      expect(sshable).to receive(:cmd).with("true").and_return("true")
+      expect(sshable).to receive(:cmd).with(VM_HOST_NVME_DISK_COMMAND).and_return("/dev/nvmen1e1")
+      allow(vm_host).to receive(:get_disk_status).with(cmd_output: "/dev/nvmen1e1").and_return("up")
 
-      expect(sshable).to receive(:cmd).and_raise Sshable::SshError.new("ssh failed", "", "", nil, nil)
+      ipv6_output = "name = dns.google"
+      ipv4_output = "name = dns.google"
+      expect(sshable).to receive(:cmd).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_output)
+      allow(vm_host).to receive(:get_network_status).with(cmd_output: ipv4_output).and_return("up")
+      expect(sshable).to receive(:cmd).with(NSLOOKUP_IPV6_COMMAND).and_return(ipv6_output)
+      allow(vm_host).to receive(:get_network_status).with(cmd_output: ipv6_output).and_return("up")
+      
+      expect(nx.available?).to be true
+    end
+
+    it "returns true when no disks found" do
+      expect(sshable).to receive(:cmd).with("true").and_return("true")
+      expect(sshable).to receive(:cmd).with(VM_HOST_NVME_DISK_COMMAND).and_return("")
+      allow(vm_host).to receive(:get_disk_status).with(cmd_output: "").and_return("no_nvme_disks")
+
+      ipv6_output = "name = dns.google"
+      ipv4_output = "name = dns.google"
+      expect(sshable).to receive(:cmd).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_output)
+      allow(vm_host).to receive(:get_network_status).with(cmd_output: ipv4_output).and_return("up")
+      expect(sshable).to receive(:cmd).with(NSLOOKUP_IPV6_COMMAND).and_return(ipv6_output)
+      allow(vm_host).to receive(:get_network_status).with(cmd_output: ipv6_output).and_return("up")
+      
+      expect(nx.available?).to be true
+    end
+
+    it "returns false when SSH fails" do
+      # Mock the SSH command to raise an error
+      expect(sshable).to receive(:cmd).with("true").and_raise(Sshable::SshError.new("ssh failed", "", "", nil, nil))
+      expect(nx.available?).to be false
+    end
+
+    it "returns false when disk connectivity down" do
+      expect(sshable).to receive(:cmd).with("true").and_return("true")
+      
+      expect(sshable).to receive(:cmd).with(VM_HOST_NVME_DISK_COMMAND).and_return("segmentation fault")
+      allow(vm_host).to receive(:get_disk_status).with(cmd_output: "segmentation fault").and_return("down")
+      expect(nx.available?).to be false
+    end
+
+    it "returns false when IPv4 network down" do
+      expect(sshable).to receive(:cmd).with("true").and_return("true")
+      
+      expect(sshable).to receive(:cmd).with(VM_HOST_NVME_DISK_COMMAND).and_return("/dev/nvmen1e1")
+      allow(vm_host).to receive(:get_disk_status).with(cmd_output: "/dev/nvmen1e1").and_return("up")
+
+      ipv4_output = "dns.google"
+      expect(sshable).to receive(:cmd).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_output)
+      allow(vm_host).to receive(:get_network_status).with(cmd_output: ipv4_output).and_return("down")
+      
+      expect(nx.available?).to be false
+    end
+
+    it "returns false when IPv6 network down" do
+      expect(sshable).to receive(:cmd).with("true").and_return("true")
+      
+      expect(sshable).to receive(:cmd).with(VM_HOST_NVME_DISK_COMMAND).and_return("/dev/nvmen1e1")
+      allow(vm_host).to receive(:get_disk_status).with(cmd_output: "/dev/nvmen1e1").and_return("up")
+
+      ipv4_output = "dns.google"
+      expect(sshable).to receive(:cmd).with(NSLOOKUP_IPV4_COMMAND).and_return(ipv4_output)
+      allow(vm_host).to receive(:get_network_status).with(cmd_output: ipv4_output).and_return("up")
+
+      ipv6_output = "name = dns.google"
+      expect(sshable).to receive(:cmd).with(NSLOOKUP_IPV6_COMMAND).and_return(ipv6_output)
+      allow(vm_host).to receive(:get_network_status).with(cmd_output: ipv6_output).and_return("down")
+      
       expect(nx.available?).to be false
     end
   end
