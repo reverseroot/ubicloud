@@ -24,6 +24,9 @@ class VmHost < Sequel::Model
   semaphore :checkup, :reboot, :destroy
 
   VM_HOST_NVME_DISK_COMMAND = "nvme list"
+  # Google's public DNS
+  NSLOOKUP_IPV4_COMMAND = "timeout 1s nslookup 8.8.8.8"
+  NSLOOKUP_IPV6_COMMAND = "timeout 1s nslookup -type=AAAA 2001:4860:4860::8888"
 
   def host_prefix
     net6.netmask.prefix_len
@@ -244,7 +247,8 @@ class VmHost < Sequel::Model
   def init_monitor_signals
     {
       pulse: Pulse.new(self),
-      disk_health: DiskHealth.new(self)
+      disk_health: DiskHealth.new(self),
+      network_health: NetworkHealth.new(self)
     }
   end
 
@@ -256,7 +260,6 @@ class VmHost < Sequel::Model
       "down"
     end
     pulse = aggregate_readings(previous_pulse: previous_pulse, reading: reading)
-
     if pulse[:reading] == "down" && pulse[:reading_rpt] > 5 && Time.now - pulse[:reading_chg] > 30 && !reload.checkup_set?
       incr_checkup
     end
@@ -280,18 +283,53 @@ class VmHost < Sequel::Model
     disk_health
   end
 
+  def check_network_health(session:, previous_network_health:)
+    ipv4_reading = begin
+      cmd_output = session[:ssh_session].exec!(NSLOOKUP_IPV4_COMMAND).strip
+      get_network_status(cmd_output: cmd_output)
+    rescue
+      "down"
+    end
+
+    ipv6_reading = begin
+      cmd_output = session[:ssh_session].exec!(NSLOOKUP_IPV6_COMMAND).strip
+      get_network_status(cmd_output: cmd_output)
+    rescue
+      "down"
+    end
+
+    network_health = aggregate_network_readings(
+      previous_network_health: previous_network_health,
+      ipv4_reading: ipv4_reading,
+      ipv6_reading: ipv6_reading
+    )
+
+    if network_health[:reading] == "down" && network_health[:reading_rpt] > 5 && Time.now - network_health[:reading_chg] > 30 && !reload.checkup_set?
+      incr_checkup
+    end
+    network_health
+  end
+
   def get_disk_status(cmd_output:)
     case cmd_output
-      when /segmentation fault/i
-        "down"
+    when /segmentation fault/i
+      "down"
+    else
+      # Check if any NVMe disks are listed in the response
+      if cmd_output.lines.any? { |line| line.start_with?('/dev/nvme') }
+        "up"
       else
-        # Check if any NVMe disks are listed in the response
-        if cmd_output.lines.any? { |line| line.start_with?('/dev/nvme') }
-          "up"
-        else
-          "no_nvme_disks"
-        end
+        "no_nvme_disks"
       end
+    end
+  end
+
+  def get_network_status(cmd_output:)
+    if cmd_output.lines.any? { |line| line.include?('dns.google') }
+      "up"
+    else
+      "down"
+    end
   end
 
   def available_storage_gib

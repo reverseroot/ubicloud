@@ -133,15 +133,26 @@ module HealthMonitorMethods
     }.merge(data)
   end
 
-  # There is some code duplication here but we might have different signals
-  # which could need its own aggregation. So keeping aggregate logic separate.
-  def aggregate_disk_readings(previous_disk_health:, reading:, data: {})
-  previous_disk_health ||= {}
+  def aggregate_disk_readings(previous_disk_health:, reading:)
+    previous_disk_health ||= {}
     {
       reading: reading,
       reading_rpt: (previous_disk_health[:reading] == reading) ? previous_disk_health[:reading_rpt] + 1 : 1,
       reading_chg: (previous_disk_health[:reading] == reading) ? previous_disk_health[:reading_chg] : Time.now
-    }.merge(data)
+    }
+  end
+
+  def aggregate_network_readings(previous_network_health:, ipv4_reading:, ipv6_reading:)
+    previous_network_health ||= {}
+    curr_reading = ipv4_reading == "up" && ipv6_reading == "up" ? "up" : "down"
+    # Combine IPv4 and IPv6 readings into a single network health status
+    {
+      reading: curr_reading,
+      reading_rpt: (previous_network_health[:reading] == curr_reading) ? previous_network_health[:reading_rpt] + 1 : 1,
+      reading_chg: (previous_network_health[:reading] == curr_reading) ? previous_network_health[:reading_chg] : Time.now,
+      ipv4: ipv4_reading,
+      ipv6: ipv6_reading
+    }
   end
 
   def needs_event_loop_for_pulse_check?

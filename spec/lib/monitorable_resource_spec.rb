@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "../model/spec_helper"
+require_relative "../../lib/monitor_signal"
 
 RSpec.describe MonitorableResource do
   let(:postgres_server) { PostgresServer.new { _1.id = "c068cac7-ed45-82db-bf38-a003582b36ee" } }
@@ -109,6 +110,82 @@ RSpec.describe MonitorableResource do
       expect(postgres_server).to receive(:check_pulse).and_return({reading: "up", reading_rpt: 6})
       expect(Clog).to receive(:emit)
       r_w_event_loop.check_pulse
+    end
+  end
+
+  describe '#init_monitor_signals' do
+    context 'when resource responds to init_monitor_signals' do
+      it 'initializes monitor signals from resource' do
+        r_without_event_loop.init_monitor_signals
+        monitor_signals = r_without_event_loop.instance_variable_get(:@monitor_signals)
+        expect(monitor_signals).to include(
+          pulse: be_a(Pulse),
+          disk_health: be_a(DiskHealth),
+          network_health: be_a(NetworkHealth)
+        )
+      end
+    end
+
+    context 'when resource does not respond to init_monitor_signals' do
+      it 'initializes monitor signals with a default Pulse instance' do
+        r_w_event_loop.init_monitor_signals
+        expect(r_w_event_loop.instance_variable_get(:@monitor_signals)).to include(:pulse)
+        expect(r_w_event_loop.instance_variable_get(:@monitor_signals)[:pulse]).to be_a(Pulse)
+      end
+    end
+  end
+
+  describe "#check_health" do
+    let(:monitor_signals) {
+      {
+        pulse: Pulse.new(vm_host),
+        disk_health: DiskHealth.new(vm_host),
+        network_health: NetworkHealth.new(vm_host)
+      }
+    }
+    before do
+      r_without_event_loop.instance_variable_set(:@session, "not nil")
+      r_without_event_loop.instance_variable_set(:@monitor_signals, monitor_signals)
+    end
+    it 'updates health status for all' do
+      allow(monitor_signals[:pulse]).to receive(:get_status).and_return({ reading: "up", reading_rpt: 1})
+      allow(monitor_signals[:disk_health]).to receive(:get_status).and_return({ reading: "up", reading_rpt: 1})
+      allow(monitor_signals[:network_health]).to receive(:get_status).and_return({ reading: "up", reading_rpt: 1})
+      r_without_event_loop.check_health
+      expect(r_without_event_loop.instance_variable_get(:@health)[:pulse]).to eq({ reading: "up", reading_rpt: 1 })
+      expect(r_without_event_loop.instance_variable_get(:@health)[:disk_health]).to eq({ reading: "up", reading_rpt: 1 })
+      expect(r_without_event_loop.instance_variable_get(:@health)[:network_health]).to eq({ reading: "up", reading_rpt: 1 })
+    end
+
+    context 'when pulse signal is down' do
+      it 'updates health status for all' do
+        allow(monitor_signals[:pulse]).to receive(:get_status).and_return({ reading: "down", reading_rpt: 1 })
+        allow(monitor_signals[:disk_health]).to receive(:get_status).and_return({ reading: "up", reading_rpt: 1 })
+        allow(monitor_signals[:network_health]).to receive(:get_status).and_return({ reading: "up", reading_rpt: 1})
+        r_without_event_loop.check_health
+        expect(r_without_event_loop.instance_variable_get(:@health)[:pulse]).to eq({ reading: "down", reading_rpt: 1 })
+        expect(r_without_event_loop.instance_variable_get(:@health)[:disk_health]).to eq({ reading: "up", reading_rpt: 1 })
+        expect(r_without_event_loop.instance_variable_get(:@health)[:network_health]).to eq({ reading: "up", reading_rpt: 1 })
+      end
+    end
+
+    context 'when disk & network signal is down' do
+      it 'updates health status for pulse and disk health' do
+        allow(monitor_signals[:pulse]).to receive(:get_status).and_return({ reading: "up", reading_rpt: 1 })
+        allow(monitor_signals[:disk_health]).to receive(:get_status).and_return({ reading: "down", reading_rpt: 1 })
+        allow(monitor_signals[:network_health]).to receive(:get_status).and_return({ reading: "down", reading_rpt: 1})
+        r_without_event_loop.check_health
+        expect(r_without_event_loop.instance_variable_get(:@health)[:pulse]).to eq({ reading: "up", reading_rpt: 1 })
+        expect(r_without_event_loop.instance_variable_get(:@health)[:disk_health]).to eq({ reading: "down", reading_rpt: 1 })
+        expect(r_without_event_loop.instance_variable_get(:@health)[:network_health]).to eq({ reading: "down", reading_rpt: 1 })
+      end
+    end
+
+    it "waits for the pulse thread to finish" do
+      pulse_thread = Thread.new {}
+      expect(pulse_thread).to receive(:join)
+      r_w_event_loop.instance_variable_set(:@pulse_thread, pulse_thread)
+      r_w_event_loop.check_health
     end
   end
 

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../../model/vm_host"
+
 class Prog::Vm::HostNexus < Prog::Base
   subject_is :sshable, :vm_host
   semaphore :checkup, :reboot, :destroy
@@ -245,14 +247,23 @@ class Prog::Vm::HostNexus < Prog::Base
   end
 
   def available?
-    #check ssh connectivity
     sshable.cmd("true")
 
-    #check disk connectivity
     cmd_output = sshable.cmd(VM_HOST_NVME_DISK_COMMAND)
     if vm_host.get_disk_status(cmd_output: cmd_output) == "down"
       return false
     end
+
+    cmd_output = sshable.cmd(NSLOOKUP_IPV4_COMMAND)
+    if vm_host.get_network_status(cmd_output: cmd_output) == "down"
+      return false
+    end
+
+    cmd_output = sshable.cmd(NSLOOKUP_IPV6_COMMAND)
+    if vm_host.get_network_status(cmd_output: cmd_output) == "down"
+      return false
+    end
+    true
   rescue
     false
   end

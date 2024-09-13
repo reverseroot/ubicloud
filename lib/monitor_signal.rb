@@ -2,16 +2,16 @@
 
 # Base class for monitor signals
 class MonitorSignal
-    attr_accessor :resource, :status
-  
-    def initialize(resource)
-      @resource = resource
-    end
-  
-    def get_status(session:, prev:)
-      raise NotImplementedError, "This method must be overridden"
-    end
+  attr_accessor :resource, :status
+
+  def initialize(resource)
+    @resource = resource
   end
+
+  def get_status(session:, prev:)
+    raise NotImplementedError, "This method must be overridden"
+  end
+end
   
   class Pulse < MonitorSignal
     def get_status(session:, prev:)
@@ -34,5 +34,17 @@ class MonitorSignal
         Clog.emit("Disk health checking has failed.") { {pulse_check_failure: {ubid: @resource.ubid, exception: Util.exception_to_hash(ex)}} }
       end
       @disk_health
+    end
+  end
+
+  class NetworkHealth < MonitorSignal
+    def get_status(session:, prev:)
+      begin
+        @network_health = @resource.check_network_health(session: session, previous_network_health: prev)
+        Clog.emit("Got new network health.") { {got_network_health: {ubid: @resource.ubid, pulse: @network_health}} } if @network_health[:reading_rpt] % 5 == 1 || @network_health[:reading] != "up"
+      rescue => ex
+        Clog.emit("Netowrk health checking has failed.") { {pulse_check_failure: {ubid: @resource.ubid, exception: Util.exception_to_hash(ex)}} }
+      end
+      @network_health
     end
   end
